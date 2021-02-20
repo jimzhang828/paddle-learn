@@ -14,6 +14,7 @@ import paddle
 from paddle.static import InputSpec
 from paddle.io import DataLoader
 from tqdm import tqdm
+import paddle_serving_client.io as serving_io
 
 import utils.log as log
 from models.text_cnn import TextCNN
@@ -46,12 +47,14 @@ GAMMA = float(config.get('scheduler', 'gamma'))
 
 id2label = LABELS.split(',')
 label2id = {label: i for i, label in enumerate(id2label)}
-embeddings = np.load(EMBEDDING_PATH)
 with open(VOCAB_PATH) as f:
     vocab2id = json.load(f)
 id2vocab = {v: k for k, v in vocab2id.items()}
 NUM_CLASS = len(id2label)
-VOCAB_SIZE, EMBED_DIM = embeddings.shape
+# embeddings = np.load(EMBEDDING_PATH)
+# VOCAB_SIZE, EMBED_DIM = embeddings.shape
+VOCAB_SIZE = len(vocab2id)
+EMBED_DIM = 300
 logging.info('embedding shape: (%d, %d)', VOCAB_SIZE, EMBED_DIM)
 logging.info('labels: %s', ','.join(['%d:%s' % (i, label) for i, label in enumerate(id2label)]))
 
@@ -76,22 +79,22 @@ def _create_dataset(data_path):
     return dataset
 
 
-def _setup_datasets(train_path, valid_path, test_path):
-    """处理数据集"""
-    # 创建训练集
-    logging.info('Creating training data')
-    train_data = _create_dataset(train_path)
+# def _setup_datasets(train_path, valid_path, test_path):
+#     """处理数据集"""
+#     # 创建训练集
+#     logging.info('Creating training data')
+#     train_data = _create_dataset(train_path)
 
-    # 创建验证集
-    logging.info('Creating validation data')
-    valid_data = _create_dataset(valid_path)
+#     # 创建验证集
+#     logging.info('Creating validation data')
+#     valid_data = _create_dataset(valid_path)
 
-    # 创建测试集
-    logging.info('Creating testing data')
-    # test_data = _create_dataset(test_path)
-    test_data = None
+#     # 创建测试集
+#     logging.info('Creating testing data')
+#     test_data = _create_dataset(test_path)
+#     # test_data = None
 
-    return train_data, valid_data, test_data
+#     return train_data, valid_data, test_data
 
 
 def token_padding(text, length):
@@ -106,9 +109,13 @@ def generate_batch(batch):
     return text, label
 
 
-train_data, valid_data, test_data = _setup_datasets(TRAIN_PATH, VALID_PATH, TEST_PATH)
+# train_data, valid_data, test_data = _setup_datasets(TRAIN_PATH, VALID_PATH, TEST_PATH)
+train_data = _create_dataset(TRAIN_PATH)
 train_loader = DataLoader(train_data, shuffle=True, batch_size=BATCH_SIZE, collate_fn=generate_batch)
-valid_loader = DataLoader(train_data, batch_size=BATCH_SIZE, collate_fn=generate_batch)
+# valid_data = _create_dataset(VALID_PATH)
+# valid_loader = DataLoader(valid_data, batch_size=BATCH_SIZE, collate_fn=generate_batch)
+# test_data = _create_dataset(TEST_PATH)
+# test_loader = DataLoader(test_data, batch_size=BATCH_SIZE, collate_fn=generate_batch)
 
 model_input = InputSpec([None, MAX_SEQUENCE_LENGTH], 'int64', 'input')
 model_label = InputSpec([None, 1], 'int64', 'label')
@@ -118,18 +125,72 @@ network = TextCNN(vocab_size=VOCAB_SIZE,
                   num_class=NUM_CLASS, 
                   kernel_num=KERNEL_NUM, 
                   kernel_sizes=KERNEL_SIZES, 
-                  dropout=DROPOUT, 
-                  embeddings=embeddings)
-model = paddle.Model(network, inputs=model_input, labels=model_label)
+                  dropout=DROPOUT, )
+                #   embeddings=embeddings)
+
+# Model 方式训练
+# model = paddle.Model(network, inputs=model_input, labels=model_label)
+# loss_fn = paddle.nn.CrossEntropyLoss()
+# optimizer = paddle.optimizer.SGD(learning_rate=LR, parameters=model.parameters())
+# metrics = [
+#     paddle.metric.Accuracy()
+# ]
+# model.prepare(optimizer=optimizer, loss=loss_fn, metrics=metrics)
+# model.fit(train_data=train_loader, eval_data=valid_loader, epochs=NUM_EPOCHS, verbose=1)
+
+# model.save('saved/checkpoint')
+# model.save('saved/inference_model')
+
+# logging.info('loading model')
+# model.load('saved/checkpoint')
+# logging.info('load model successfully')
+
+# model.evaluate(train_loader)
+# model.evaluate(valid_loader)
+# model.evaluate(test_loader)
+
+# logging.info('start saving model')
+# paddle.jit.save(model.network, './saved/jitmodel')
+# serving_io.save_dygraph_model('./saved/serving_model', './saved/client_config', model.network)
+# logging.info('saving model successfully')
+
+# 基础方式训练
+network.train()
 loss_fn = paddle.nn.CrossEntropyLoss()
-optimizer = paddle.optimizer.SGD(learning_rate=LR, parameters=model.parameters())
-metrics = [
-    # paddle.metric.Precision(), 
-    # paddle.metric.Recall(), 
-    paddle.metric.Accuracy()
-]
-model.prepare(optimizer=optimizer, loss=loss_fn, metrics=metrics)
-model.fit(train_data=train_loader, eval_data=valid_loader, epochs=NUM_EPOCHS, verbose=1, save_dir='./saved')
+optimizer = paddle.optimizer.SGD(learning_rate=LR, parameters=network.parameters())
+for epoch in range(NUM_EPOCHS):
+    acc_list = []
+    for batch_id, data in enumerate(train_loader()):
+        x_data = data[0]            # 训练数据
+        y_data = data[1]            # 训练数据标签
+        y_data = paddle.reshape(y_data, [-1, 1])
+
+        predicts = network(x_data)    # 预测结果
+        # print(x_data.shape)
+        # print(y_data.shape)
+        # print(predicts.shape)
+        # exit()
+
+        # 计算损失 等价于 prepare 中loss的设置
+        loss = loss_fn(predicts, y_data)
+
+        # 计算准确率 等价于 prepare 中metrics的设置
+        acc = paddle.metric.accuracy(predicts, y_data)
+        acc_list.append(acc.numpy())
+
+        # 下面的反向传播、打印训练信息、更新参数、梯度清零都被封装到 Model.fit() 中
+
+        # 反向传播
+        loss.backward()
+
+        if (batch_id + 1) % 100 == 0:
+            logging.info("epoch=%d, batch=%d, loss=%f, acc=%f", epoch, batch_id + 1, loss.numpy(), np.average(acc_list))
+
+        # 更新参数
+        optimizer.step()
+
+        # 梯度清零
+        optimizer.clear_grad()
 
 
 def main():

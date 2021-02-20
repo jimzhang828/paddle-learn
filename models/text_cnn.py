@@ -33,6 +33,7 @@ class TextCNN(nn.Layer):
         self.dropout = nn.Dropout(dropout)
         self.fc = nn.Linear(len(kernel_sizes) * kernel_num, num_class)
 
+    @paddle.jit.to_static
     def forward(self, x):
         """
         forward
