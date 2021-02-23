@@ -50,7 +50,7 @@ class TextCNN(nn.Layer):
 
 
 if __name__ == '__main__':
-    net = TextCNN(vocab_size=10000, embed_dim=100, num_class=10, 
+    net = TextCNN(vocab_size=635964, embed_dim=300, num_class=14, 
                   kernel_num=100, kernel_sizes=[2, 3, 4], dropout=0.5)
     paddle.summary(net, (16, 128), dtypes=np.int32)
 

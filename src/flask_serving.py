@@ -10,14 +10,17 @@ from flask import request
 import paddle
 import numpy as np
 import jieba
+import paddle.static as static
+import threading
 
+lock = threading.Lock()
+exec_strategy = static.ExecutionStrategy()
+exec_strategy.num_threads = 4
 
 app = flask.Flask(__name__)
 network = paddle.jit.load('./saved/jitmodel')
 network.eval()
-# x = paddle.to_tensor(np.array([0] * 32).reshape(1, 32))
-# out = network(x)
-# print(out.numpy().argmax())
+
 with open('./data/thucnews_vocab2id.json') as f:
     vocab2id = json.load(f)
 
@@ -32,27 +35,26 @@ def feed_class_tokens():
     if not tokens:
         return '{"error": "no tokens input"}'
     tokens = paddle.to_tensor(np.array(tokens).reshape(1, 32))
-    out = network(tokens)
+    with lock:
+        out = network(tokens)
     pred = out.numpy().argmax()
     return '{"pred": %d}' % pred
 
 
-@app.route('/feed_class_text', methods=['POST'])
-def feed_class_text():
+@app.route('/feed_class_batch_tokens', methods=['POST'])
+def feed_class_batch_tokens():
     """
-    feed class text
+    feed class batch tokens
     """
     data = request.get_data()
-    text = json.loads(data.decode('utf-8')).get('text', [])
-    if not text:
-        return '{"error": "no text input"}'
-    tokens = jieba.cut(text)
-    tokens = [vocab2id.get(t, 0) for t in tokens]
-    tokens = np.array((tokens + [0] * 32)[:32]).reshape(1, 32)
-    tokens = paddle.to_tensor(tokens)
-    out = network(tokens)
-    pred = out.numpy().argmax()
-    return '{"pred": %d}' % pred
+    batch_tokens = json.loads(data.decode('utf-8')).get('batch_tokens', [])
+    if not batch_tokens:
+        return '{"error": "no batch_tokens input"}'
+    batch_tokens = paddle.to_tensor(np.array(batch_tokens))
+    with lock:
+        out = network(batch_tokens)
+    pred = out.numpy().argmax(axis=1)
+    return '{"pred": [%s]}' % ','.join(map(str, pred))
 
 
 if __name__ == '__main__':

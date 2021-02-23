@@ -5,7 +5,6 @@ Date:    2021/02/21
 """
 import json
 
-import jieba
 import numpy as np
 from paddle_serving_client import Client
 
@@ -19,8 +18,6 @@ class FeedClassificationClient(object):
         self.urls = urls
         self.feed_var = 'generated_var_17144'
         self.fetch_var = 'translated_layer/scale_0.tmp_0'
-        with open('./data/thucnews_vocab2id.json') as f:
-            self.vocab2id = json.load(f)
         self.client = Client()
         self.connect_to_servers()
     
@@ -30,25 +27,30 @@ class FeedClassificationClient(object):
         """
         self.client.load_client_config(self.config_file)
         self.client.connect(self.urls)
-    
-    def tokenize(self, text):
-        """tokenization"""
-        tokens = jieba.cut(text)
-        tokens = [self.vocab2id.get(t, 0) for t in tokens]
-        tokens = np.array((tokens + [0] * 32)[:32])
-        return tokens
-    
-    def predict(self, text):
+
+    def predict(self, tokens):
         """
         预测
         """
-        tokens = self.tokenize(text)
         fetch_map = self.client.predict(feed={self.feed_var: tokens}, fetch=[self.fetch_var])
         logits = fetch_map[self.fetch_var]
         return np.argmax(logits)
 
+    def predict_batch(self, batch_tokens):
+        """
+        batch预测
+        """
+        fetch_map = self.client.predict(feed={self.feed_var: batch_tokens}, fetch=[self.fetch_var], batch=True)
+        logits = fetch_map[self.fetch_var]
+        return np.argmax(logits, axis=1)
+
 
 if __name__ == '__main__':
-    client = FeedClassificationClient('saved/client_config/serving_client_conf.prototxt', ['127.0.0.1:9292'])
-    text = '百度你好'
-    print(client.predict(text))
+    client = FeedClassificationClient('saved/client_config/serving_client_conf.prototxt', ['127.0.0.1:9393'])
+    # client = FeedClassificationClient(
+    #     'saved/client_config/serving_client_conf.prototxt', 
+    #     ['yq01-bdg-dst-gpu-k40m-03.yq01.baidu.com:9393'])
+    batch_tokens = np.array([[0] * 32] * 16)
+    tokens = np.array([0] * 32)
+    print(client.predict(tokens))
+    print(client.predict_batch(batch_tokens))

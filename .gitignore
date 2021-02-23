@@ -132,3 +132,5 @@ data/
 .vscode/
 log/
 saved/
+PipelineServingLogs/
+workdir/
