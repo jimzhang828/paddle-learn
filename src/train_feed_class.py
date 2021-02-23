@@ -51,10 +51,10 @@ with open(VOCAB_PATH) as f:
     vocab2id = json.load(f)
 id2vocab = {v: k for k, v in vocab2id.items()}
 NUM_CLASS = len(id2label)
-# embeddings = np.load(EMBEDDING_PATH)
-# VOCAB_SIZE, EMBED_DIM = embeddings.shape
-VOCAB_SIZE = len(vocab2id)
-EMBED_DIM = 300
+embeddings = np.load(EMBEDDING_PATH)
+VOCAB_SIZE, EMBED_DIM = embeddings.shape
+# VOCAB_SIZE = len(vocab2id)
+# EMBED_DIM = 300
 logging.info('embedding shape: (%d, %d)', VOCAB_SIZE, EMBED_DIM)
 logging.info('labels: %s', ','.join(['%d:%s' % (i, label) for i, label in enumerate(id2label)]))
 
@@ -112,8 +112,8 @@ def generate_batch(batch):
 # train_data, valid_data, test_data = _setup_datasets(TRAIN_PATH, VALID_PATH, TEST_PATH)
 train_data = _create_dataset(TRAIN_PATH)
 train_loader = DataLoader(train_data, shuffle=True, batch_size=BATCH_SIZE, collate_fn=generate_batch)
-# valid_data = _create_dataset(VALID_PATH)
-# valid_loader = DataLoader(valid_data, batch_size=BATCH_SIZE, collate_fn=generate_batch)
+valid_data = _create_dataset(VALID_PATH)
+valid_loader = DataLoader(valid_data, batch_size=BATCH_SIZE, collate_fn=generate_batch)
 # test_data = _create_dataset(TEST_PATH)
 # test_loader = DataLoader(test_data, batch_size=BATCH_SIZE, collate_fn=generate_batch)
 
@@ -125,8 +125,8 @@ network = TextCNN(vocab_size=VOCAB_SIZE,
                   num_class=NUM_CLASS, 
                   kernel_num=KERNEL_NUM, 
                   kernel_sizes=KERNEL_SIZES, 
-                  dropout=DROPOUT, )
-                #   embeddings=embeddings)
+                  dropout=DROPOUT, 
+                  embeddings=embeddings)
 
 # Model 方式训练
 # model = paddle.Model(network, inputs=model_input, labels=model_label)
@@ -159,38 +159,52 @@ network.train()
 loss_fn = paddle.nn.CrossEntropyLoss()
 optimizer = paddle.optimizer.SGD(learning_rate=LR, parameters=network.parameters())
 for epoch in range(NUM_EPOCHS):
-    acc_list = []
-    for batch_id, data in enumerate(train_loader()):
-        x_data = data[0]            # 训练数据
-        y_data = data[1]            # 训练数据标签
+    for batch_id, (x_data, y_data) in enumerate(train_loader()):
+
         y_data = paddle.reshape(y_data, [-1, 1])
 
         predicts = network(x_data)    # 预测结果
-        # print(x_data.shape)
-        # print(y_data.shape)
-        # print(predicts.shape)
-        # exit()
 
         # 计算损失 等价于 prepare 中loss的设置
         loss = loss_fn(predicts, y_data)
 
         # 计算准确率 等价于 prepare 中metrics的设置
-        acc = paddle.metric.accuracy(predicts, y_data)
-        acc_list.append(acc.numpy())
-
-        # 下面的反向传播、打印训练信息、更新参数、梯度清零都被封装到 Model.fit() 中
+        # acc = paddle.metric.accuracy(predicts, y_data)
 
         # 反向传播
         loss.backward()
 
         if (batch_id + 1) % 100 == 0:
-            logging.info("epoch=%d, batch=%d, loss=%f, acc=%f", epoch, batch_id + 1, loss.numpy(), np.average(acc_list))
+            logging.info("epoch=%d, batch=%d, loss=%f", epoch, batch_id + 1, loss.numpy())
 
         # 更新参数
         optimizer.step()
 
         # 梯度清零
         optimizer.clear_grad()
+    
+    # Evaluation
+    network.eval()
+    all_predicts, all_labels = None, None
+    for batch_id, (x_data, y_data) in enumerate(valid_loader):
+        y_data = paddle.reshape(y_data, [-1, 1])
+        predicts = network(x_data)
+        if all_predicts is None:
+            all_predicts = predicts
+            all_labels = y_data
+        else:
+            all_predicts = paddle.concat([all_predicts, predicts], axis=0)
+            all_labels = paddle.concat([all_labels, y_data], axis=0)
+    loss = loss_fn(all_predicts, all_labels)
+    acc = paddle.metric.accuracy(all_predicts, all_labels)
+    logging.info("complete epoch=%d, loss=%f, acc=%f", epoch, loss.numpy(), acc.numpy())
+    network.train()
+
+
+logging.info('start saving model')
+paddle.jit.save(network, './saved/feed_class_0223/jitmodel')
+serving_io.save_dygraph_model('./saved/feed_class_0223/serving_model', './saved/feed_class_0223/client_config', network)
+logging.info('saving model successfully')
 
 
 def main():
