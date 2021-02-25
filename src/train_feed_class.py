@@ -159,27 +159,20 @@ network.train()
 loss_fn = paddle.nn.CrossEntropyLoss()
 optimizer = paddle.optimizer.SGD(learning_rate=LR, parameters=network.parameters())
 for epoch in range(NUM_EPOCHS):
+    # Train
     for batch_id, (x_data, y_data) in enumerate(train_loader()):
-
         y_data = paddle.reshape(y_data, [-1, 1])
-
         predicts = network(x_data)    # 预测结果
-
         # 计算损失 等价于 prepare 中loss的设置
         loss = loss_fn(predicts, y_data)
-
         # 计算准确率 等价于 prepare 中metrics的设置
         # acc = paddle.metric.accuracy(predicts, y_data)
-
         # 反向传播
         loss.backward()
-
         if (batch_id + 1) % 100 == 0:
             logging.info("epoch=%d, batch=%d, loss=%f", epoch, batch_id + 1, loss.numpy())
-
         # 更新参数
         optimizer.step()
-
         # 梯度清零
         optimizer.clear_grad()
     
